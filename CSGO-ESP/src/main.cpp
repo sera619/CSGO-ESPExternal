@@ -3,7 +3,6 @@
 
 #include "memory.hpp"
 
-
 #include <Windows.h>
 #include <d3d11.h>
 #include <dwmapi.h>
@@ -11,7 +10,6 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_dx11.h>
 #include <imgui/imgui_impl_win32.h>
-
 
 namespace offsets {
 	constexpr auto local_player = 0xDE6964;
@@ -62,6 +60,27 @@ struct ViewMatrix {
 	float data[4][4];
 };
 
+static bool world_to_screen(const Vector& world, Vector& screen, const ViewMatrix& vm) noexcept {
+	float w = vm[3][0] * world.x + vm[3][1] * world.y + vm[3][2] * world.z + vm[3][3];
+	if (w < 0.001f) {
+		return false;
+	}
+
+	const float x = world.x * vm[0][0] + world.y * vm[0][1] + world.z * vm[0][2] + vm[0][3];
+	const float y = world.x * vm[1][0] + world.y * vm[1][1] + world.z * vm[1][2] + vm[1][3];
+
+	w = 1.f / w;
+	float nx = x * w;
+	float ny = y * w;
+
+	const ImVec2 size = ImGui::GetIO().DisplaySize;
+
+	screen.x = (size.x * 0.5f * nx) + (nx + size.x * 0.5f);
+	screen.y = -(size.y * 0.5f * ny) + (ny + size.y * 0.5f);
+
+	return true;
+}
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -77,13 +96,40 @@ LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM w_param, LPA
 }
 
 INT APIENTRY WinMain(HINSTANCE instance, HINSTANCE, PSTR, INT cmd_show) {
+	if (!AllocConsole()) {
+		return FALSE;
+	}
+
+	FILE* file{ nullptr };
+	freopen_s(&file, "CONIN$", "r", stdin);
+	freopen_s(&file, "CONOUT$", "w", stdout);
+	freopen_s(&file, "CONIN$", "w", stderr);
+
+	DWORD pid = memory::get_process_id(L"csgo.exe");
+	const HANDLE handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+
+	if (!handle) {
+		return FALSE;
+	}
+
+
+	if (!pid) {
+		std::cout << "Waiting for CS:GO ... \n";
+	}
+
+
 	WNDCLASSEXW wc{};
 	wc.cbSize = sizeof(WNDCLASSEXW);
 	wc.style = CS_HREDRAW | CS_VREDRAW;
 	wc.lpfnWndProc = window_procedure;
+	wc.cbClsExtra = 0;
+	wc.cbWndExtra = 0;
 	wc.hInstance = instance;
+	wc.hIcon = nullptr;
+	wc.hCursor = nullptr;
+	wc.lpszMenuName = nullptr;
 	wc.lpszClassName = L"External Overlay Class";
-
+	wc.hIconSm = nullptr;
 	RegisterClassExW(&wc);
 
 	const HWND window = CreateWindowExW(
@@ -101,7 +147,16 @@ INT APIENTRY WinMain(HINSTANCE instance, HINSTANCE, PSTR, INT cmd_show) {
 		nullptr
 	);
 
-	SetLayeredWindowAttributes(window, RGB(0, 0, 0), BYTE(255), LWA_ALPHA);
+	if (!window) {
+		UnregisterClassW(wc.lpszClassName, wc.hInstance);
+		return FALSE;
+	}
+
+	if (!SetLayeredWindowAttributes(window, RGB(0, 0, 0), BYTE(255), LWA_ALPHA)) {
+		DestroyWindow(window);
+		UnregisterClassW(wc.lpszClassName, wc.hInstance);
+		return FALSE;
+	}
 
 	{
 		RECT client_area{};
@@ -123,10 +178,14 @@ INT APIENTRY WinMain(HINSTANCE instance, HINSTANCE, PSTR, INT cmd_show) {
 	}
 
 	DXGI_SWAP_CHAIN_DESC sd{};
+	ZeroMemory(&sd, sizeof(sd));
+
 	sd.BufferDesc.RefreshRate.Numerator = 60U;
 	sd.BufferDesc.RefreshRate.Denominator = 1U;
 	sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	sd.SampleDesc.Count = 1U;
+	sd.SampleDesc.Quality = 0U;
+
 	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	sd.BufferCount = 2U;
 	sd.OutputWindow = window;
@@ -139,11 +198,12 @@ INT APIENTRY WinMain(HINSTANCE instance, HINSTANCE, PSTR, INT cmd_show) {
 		D3D_FEATURE_LEVEL_10_0
 	};
 
+	D3D_FEATURE_LEVEL feature_level{};
+
 	ID3D11Device* device{ nullptr };
 	ID3D11DeviceContext* device_context{ nullptr };
 	IDXGISwapChain* swap_chain{ nullptr };
 	ID3D11RenderTargetView* render_target_view{ nullptr };
-	D3D_FEATURE_LEVEL level{};
 
 	D3D11CreateDeviceAndSwapChain(
 		nullptr,
@@ -156,20 +216,24 @@ INT APIENTRY WinMain(HINSTANCE instance, HINSTANCE, PSTR, INT cmd_show) {
 		&sd,
 		&swap_chain,
 		&device,
-		&level,
+		&feature_level,
 		&device_context
 	);
 
 	ID3D11Texture2D* back_buffer{ nullptr };
-	swap_chain->GetBuffer(0U, IID_PPV_ARGS(&back_buffer));
+	if (FAILED(swap_chain->GetBuffer(0U, IID_PPV_ARGS(&back_buffer)))) {
+		return FALSE;
+	}
+
+	if (FAILED(device->CreateRenderTargetView(back_buffer, nullptr, &render_target_view))) {
+		return FALSE;
+	}
 
 	if (back_buffer) {
-		device->CreateRenderTargetView(back_buffer, nullptr, &render_target_view);
 		back_buffer->Release();
 	}
-	else {
-		return 1; 
-	}
+
+
 
 	ShowWindow(window, cmd_show);
 	UpdateWindow(window);
@@ -200,6 +264,8 @@ INT APIENTRY WinMain(HINSTANCE instance, HINSTANCE, PSTR, INT cmd_show) {
 		ImGui_ImplWin32_NewFrame();
 
 		ImGui::NewFrame();
+		const auto local_player = memory::Read<DWORD>(handle, client + offsets::local_player);
+
 		ImGui::GetBackgroundDrawList()->AddCircleFilled({ 500, 500 }, 10.f, ImColor(1.f, 0.f, 0.f));
 
 		ImGui::Render();

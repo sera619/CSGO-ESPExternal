@@ -28,7 +28,7 @@ namespace memory {
 		return pid;
 	}
 
-	DWORD get_module_address(const DWORD pid, const WCHAR* name) {
+	DWORD get_module_address(const DWORD pid, const WCHAR* name)  {
 		MODULEENTRY32 me;
 		me.dwSize = sizeof(MODULEENTRY32);
 
@@ -52,7 +52,7 @@ namespace memory {
 	}
 
 	template <class T>
-	T read(const HANDLE process, const DWORD address) noexcept {
+	T Read(const HANDLE process, const DWORD address) noexcept {
 		T value{};
 		ReadProcessMemory(process, reinterpret_cast<LPCVOID>(address), &value, sizeof(T), nullptr);
 		return value;
@@ -60,6 +60,6 @@ namespace memory {
 
 	template <class T>
 	void write(const HANDLE process, const DWORD address, const T& value) noexcept {
-		WriteProcessMemory(process, reinterpret_cast<LPCVOID>(address), &value, sizeof(T), nullptr);
+		WriteProcessMemory(process, reinterpret_cast<LPVOID>(address), &value, sizeof(T), nullptr);
 	}
 }
